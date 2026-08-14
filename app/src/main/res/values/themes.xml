@@ -1,0 +1,4 @@
+<resources>
+
+    <style name="Theme.FamilyLink" parent="Theme.MaterialComponents.Light" />
+</resources>
