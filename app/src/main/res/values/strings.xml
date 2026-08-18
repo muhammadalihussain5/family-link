@@ -1,4 +1,4 @@
 <resources>
-    <string name="app_name">Family link</string>
-    <string name="accessibility_service_description">Allows Family Link to intercept notifications and simulate remote input for parental assistance.</string>
+    <string name="app_name">Family Link</string>
+    <string name="accessibility_service_description">Allows Family Link to simulate remote taps and keep the linked device reachable for family assistance.</string>
 </resources>

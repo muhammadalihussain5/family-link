@@ -4,11 +4,14 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
-import androidx.compose.material3.Text
-import androidx.compose.runtime.*
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.lifecycleScope
@@ -21,6 +24,7 @@ import com.hashmi.familylink.ui.ClientMainScreen
 import com.hashmi.familylink.ui.NavKey
 import com.hashmi.familylink.ui.PermissionScreen
 import com.hashmi.familylink.ui.ServerMainScreen
+import com.hashmi.familylink.ui.SettingsScreen
 import com.hashmi.familylink.ui.SetupWizardScreen
 import com.hashmi.familylink.ui.theme.FamilyLinkTheme
 import kotlinx.coroutines.launch
@@ -35,23 +39,33 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         setContent {
             val appMode by userPreferencesRepository.appModeFlow
-                .collectAsStateWithLifecycle(initialValue = AppMode.UNDEFINED)
+                .collectAsStateWithLifecycle(initialValue = null)
 
             FamilyLinkTheme {
                 Surface(
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background
                 ) {
-                    if (appMode == AppMode.UNDEFINED) {
-                        SetupWizardScreen(
-                            onModeSelected = { mode ->
-                                lifecycleScope.launch {
-                                    userPreferencesRepository.updateAppMode(mode)
-                                }
+                    when (appMode) {
+                        null -> {
+                            Box(
+                                modifier = Modifier.fillMaxSize(),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                CircularProgressIndicator()
                             }
-                        )
-                    } else {
-                        MainNavigation(appMode)
+                        }
+                        AppMode.UNDEFINED -> {
+                            SetupWizardScreen(
+                                onModeSelected = { mode ->
+                                    lifecycleScope.launch {
+                                        userPreferencesRepository.ensureIdentity()
+                                        userPreferencesRepository.updateAppMode(mode)
+                                    }
+                                }
+                            )
+                        }
+                        else -> MainNavigation(appMode)
                     }
                 }
             }
@@ -61,9 +75,8 @@ class MainActivity : ComponentActivity() {
 
 @Composable
 fun MainNavigation(initialMode: AppMode) {
-    val backStack = rememberNavBackStack(
-        if (initialMode == AppMode.SERVER) NavKey.ServerMain else NavKey.ClientMain
-    )
+    val start = if (initialMode == AppMode.SERVER) NavKey.ServerMain else NavKey.ClientMain
+    val backStack = rememberNavBackStack(start)
 
     NavDisplay(
         backStack = backStack,
@@ -71,24 +84,26 @@ fun MainNavigation(initialMode: AppMode) {
     ) { key ->
         when (key) {
             is NavKey.ServerMain -> NavEntry(key) {
-                ServerMainScreen()
+                ServerMainScreen(
+                    onNavigateToSettings = { backStack.add(NavKey.Settings) }
+                )
             }
             is NavKey.ClientMain -> NavEntry(key) {
                 ClientMainScreen(
-                    onNavigateToPermissions = {
-                        backStack.add(NavKey.ClientPermissions)
-                    }
+                    onNavigateToPermissions = { backStack.add(NavKey.ClientPermissions) },
+                    onNavigateToSettings = { backStack.add(NavKey.Settings) }
                 )
             }
             is NavKey.ClientPermissions -> NavEntry(key) {
                 PermissionScreen(
-                    onAllPermissionsGranted = {
-                        backStack.removeLastOrNull()
-                    }
+                    onAllPermissionsGranted = { backStack.removeLastOrNull() }
                 )
             }
+            is NavKey.Settings -> NavEntry(key) {
+                SettingsScreen(onBack = { backStack.removeLastOrNull() })
+            }
             is NavKey.SetupWizard -> NavEntry(key) {
-                Text("Setup Wizard")
+                SetupWizardScreen(onModeSelected = {})
             }
             else -> error("Unknown key: $key")
         }

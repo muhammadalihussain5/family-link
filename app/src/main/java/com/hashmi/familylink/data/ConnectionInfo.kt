@@ -9,3 +9,21 @@ data class ConnectionInfo(
     val port: Int,
     val deviceName: String
 )
+
+data class DeviceIdentity(
+    val deviceId: String,
+    val pairingKey: String,
+    val deviceName: String
+)
+
+data class AuthorizedClient(
+    val deviceId: String,
+    val pairingKey: String,
+    val deviceName: String
+)
+
+data class LinkedSession(
+    val deviceId: String,
+    val deviceName: String,
+    val connectedAt: Long = System.currentTimeMillis()
+)
