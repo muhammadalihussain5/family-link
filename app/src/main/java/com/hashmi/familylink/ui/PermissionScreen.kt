@@ -2,39 +2,64 @@ package com.hashmi.familylink.ui
 
 import android.Manifest
 import android.accessibilityservice.AccessibilityServiceInfo
-import android.app.NotificationManager
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
-import android.app.Activity
-import android.media.projection.MediaProjectionManager
 import android.net.Uri
 import android.os.Build
 import android.os.PowerManager
 import android.provider.Settings
 import android.view.accessibility.AccessibilityManager
-import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ScreenShare
-import androidx.compose.material.icons.filled.*
+import androidx.compose.material.icons.filled.Accessibility
+import androidx.compose.material.icons.filled.BatteryChargingFull
+import androidx.compose.material.icons.filled.Notifications
+import androidx.compose.material.icons.filled.NotificationsActive
 import androidx.compose.material.icons.rounded.CheckCircle
-import androidx.compose.material.icons.rounded.Warning
-import androidx.compose.material3.*
-import androidx.compose.runtime.*
+import androidx.compose.material3.Button
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.Icon
+import androidx.compose.material3.LargeTopAppBar
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Text
+import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
-import com.hashmi.familylink.service.ClientAccessibilityService
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -44,73 +69,79 @@ fun PermissionScreen(
 ) {
     val context = LocalContext.current
     var permissionsState by remember { mutableStateOf(getPermissionsState(context)) }
-    var mediaProjectionGranted by remember { mutableStateOf(false) }
+    val criticalGranted = permissionsState.filter { it.required }.all { it.isGranted }
+    val scrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
 
-    val mediaProjectionLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.StartActivityForResult()
-    ) { result ->
-        if (result.resultCode == Activity.RESULT_OK) {
-            mediaProjectionGranted = true
-            // In a real app, we'd pass this result to a service
-        }
+    val notificationPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) {
+        permissionsState = getPermissionsState(context)
     }
 
-    // Refresh state when component is recomposed
-    LaunchedEffect(Unit) {
-        while(true) {
-            permissionsState = getPermissionsState(context)
-            if (permissionsState.all { it.isGranted } && mediaProjectionGranted) {
-                onAllPermissionsGranted()
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                permissionsState = getPermissionsState(context)
             }
-            kotlinx.coroutines.delay(1000)
         }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
     Scaffold(
+        modifier = modifier
+            .fillMaxSize()
+            .nestedScroll(scrollBehavior.nestedScrollConnection),
+        contentWindowInsets = WindowInsets.safeDrawing,
         topBar = {
             LargeTopAppBar(
-                title = { Text("Required Permissions") }
+                title = { Text("Required permissions") },
+                scrollBehavior = scrollBehavior
             )
         },
-        modifier = modifier.fillMaxSize()
+        bottomBar = {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(16.dp)
+            ) {
+                Button(
+                    onClick = onAllPermissionsGranted,
+                    enabled = criticalGranted,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(if (criticalGranted) "Continue" else "Grant required permissions")
+                }
+            }
+        }
     ) { innerPadding ->
         LazyColumn(
             modifier = Modifier
                 .padding(innerPadding)
                 .fillMaxSize(),
             contentPadding = PaddingValues(16.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp)
+            verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             item {
                 Text(
-                    text = "To function as a Client, Family Link needs the following permissions. These allow remote assistance and monitoring.",
+                    text = "Client mode needs these so the hub can receive notifications, stay connected, and tap on this device when you ask it to.",
                     style = MaterialTheme.typography.bodyLarge,
                     modifier = Modifier.padding(bottom = 8.dp)
                 )
             }
 
-            items(permissionsState) { item ->
+            items(permissionsState, key = { it.id }) { item ->
                 PermissionItem(
                     item = item,
                     onGrantClick = {
-                        handlePermissionGrant(context, item)
-                    }
-                )
-            }
-
-            // Media Projection is special
-            item {
-                PermissionItem(
-                    item = PermissionStatus(
-                        id = "media_projection",
-                        title = "Screen Recording",
-                        description = "Required for screen mirroring features.",
-                        icon = Icons.AutoMirrored.Filled.ScreenShare,
-                        isGranted = mediaProjectionGranted
-                    ),
-                    onGrantClick = {
-                        val mpManager = context.getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
-                        mediaProjectionLauncher.launch(mpManager.createScreenCaptureIntent())
+                        if (item.id == "post_notifications" &&
+                            Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU
+                        ) {
+                            notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                        } else {
+                            handlePermissionGrant(context, item)
+                        }
                     }
                 )
             }
@@ -126,9 +157,11 @@ fun PermissionItem(
     Card(
         modifier = Modifier.fillMaxWidth(),
         colors = CardDefaults.cardColors(
-            containerColor = if (item.isGranted) 
-                MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
-                else MaterialTheme.colorScheme.surface
+            containerColor = if (item.isGranted) {
+                MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.45f)
+            } else {
+                MaterialTheme.colorScheme.surface
+            }
         )
     ) {
         Row(
@@ -141,18 +174,32 @@ fun PermissionItem(
                 imageVector = item.icon,
                 contentDescription = null,
                 modifier = Modifier.size(32.dp),
-                tint = if (item.isGranted) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.secondary
+                tint = if (item.isGranted) {
+                    MaterialTheme.colorScheme.primary
+                } else {
+                    MaterialTheme.colorScheme.secondary
+                }
             )
             Spacer(modifier = Modifier.width(16.dp))
             Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = item.title,
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.Bold
-                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = item.title,
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                    if (item.required) {
+                        Text(
+                            text = "  required",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.secondary
+                        )
+                    }
+                }
                 Text(
                     text = item.description,
-                    style = MaterialTheme.typography.bodySmall
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
             Spacer(modifier = Modifier.width(8.dp))
@@ -163,7 +210,7 @@ fun PermissionItem(
                     tint = MaterialTheme.colorScheme.primary
                 )
             } else {
-                Button(onClick = onGrantClick) {
+                FilledTonalButton(onClick = onGrantClick) {
                     Text("Grant")
                 }
             }
@@ -176,73 +223,66 @@ data class PermissionStatus(
     val title: String,
     val description: String,
     val icon: ImageVector,
-    val isGranted: Boolean
+    val isGranted: Boolean,
+    val required: Boolean = true
 )
 
 fun getPermissionsState(context: Context): List<PermissionStatus> {
     val state = mutableListOf<PermissionStatus>()
 
-    // Accessibility Service
     state.add(
         PermissionStatus(
             id = "accessibility",
-            title = "Accessibility Service",
-            description = "Required to intercept notifications and simulate input.",
+            title = "Accessibility",
+            description = "Lets the hub tap this screen when you request remote help.",
             icon = Icons.Default.Accessibility,
             isGranted = isAccessibilityServiceEnabled(context)
         )
     )
 
-    // Notification Access (Listener Service)
     state.add(
         PermissionStatus(
             id = "notification_access",
-            title = "Notification Access",
-            description = "Allows reading all notifications more reliably.",
+            title = "Notification access",
+            description = "Relays incoming messages and alerts to the Family Hub.",
             icon = Icons.Default.NotificationsActive,
             isGranted = isNotificationServiceEnabled(context)
         )
     )
 
-    // Post Notifications (Android 13+)
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
         state.add(
             PermissionStatus(
                 id = "post_notifications",
-                title = "Post Notifications",
-                description = "Required to show service status and alerts.",
+                title = "Show status",
+                description = "Used for the always-on connection notification.",
                 icon = Icons.Default.Notifications,
                 isGranted = ContextCompat.checkSelfPermission(
                     context,
                     Manifest.permission.POST_NOTIFICATIONS
-                ) == PackageManager.PERMISSION_GRANTED
+                ) == PackageManager.PERMISSION_GRANTED,
+                required = false
             )
         )
     }
 
-    // Ignore Battery Optimizations
     val powerManager = context.getSystemService(Context.POWER_SERVICE) as PowerManager
     state.add(
         PermissionStatus(
             id = "battery",
-            title = "Ignore Battery Optimizations",
-            description = "Ensures the service stays alive in the background.",
+            title = "Ignore battery optimizations",
+            description = "Keeps the client connected after the screen turns off.",
             icon = Icons.Default.BatteryChargingFull,
-            isGranted = powerManager.isIgnoringBatteryOptimizations(context.packageName)
+            isGranted = powerManager.isIgnoringBatteryOptimizations(context.packageName),
+            required = false
         )
     )
 
-    // Media Projection (Screen Capture)
-    // Note: This is usually requested at runtime when starting capture, 
-    // but we can check if we have a saved token or just show it as a requirement.
-    // For now, we'll mark it as "needed" but we can't easily check "isGranted" without starting it.
-    // Let's assume it's granted for UI purposes if we have a way to track it, or just leave it for now.
-    
     return state
 }
 
 fun areAllPermissionsGranted(context: Context): Boolean {
-    return getPermissionsState(context).all { it.isGranted }
+    return getPermissionsState(context).filter { it.required }.all { it.isGranted }
 }
 
 fun isAccessibilityServiceEnabled(context: Context): Boolean {
@@ -252,34 +292,22 @@ fun isAccessibilityServiceEnabled(context: Context): Boolean {
 }
 
 fun isNotificationServiceEnabled(context: Context): Boolean {
-    val pkgName = context.packageName
     val flat = Settings.Secure.getString(context.contentResolver, "enabled_notification_listeners")
-    return flat?.contains(pkgName) == true
+    return flat?.contains(context.packageName) == true
 }
 
 fun handlePermissionGrant(context: Context, item: PermissionStatus) {
-    when (item.id) {
-        "accessibility" -> {
-            val intent = Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)
-            context.startActivity(intent)
+    val intent = when (item.id) {
+        "accessibility" -> Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)
+        "notification_access" -> Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)
+        "post_notifications" -> Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).apply {
+            putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName)
         }
-        "post_notifications" -> {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                val intent = Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).apply {
-                    putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName)
-                }
-                context.startActivity(intent)
-            }
+        "battery" -> Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
+            data = Uri.parse("package:${context.packageName}")
         }
-        "notification_access" -> {
-            val intent = Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)
-            context.startActivity(intent)
-        }
-        "battery" -> {
-            val intent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
-                data = Uri.parse("package:${context.packageName}")
-            }
-            context.startActivity(intent)
-        }
+        else -> return
     }
+    intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+    context.startActivity(intent)
 }

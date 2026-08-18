@@ -2,68 +2,83 @@ package com.hashmi.familylink.service
 
 import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.GestureDescription
+import android.app.Notification
 import android.graphics.Path
+import android.os.Build
 import android.util.Log
 import android.view.accessibility.AccessibilityEvent
+import com.hashmi.familylink.data.StreamMessage
+import com.hashmi.familylink.network.NetworkManager
+import java.util.UUID
 
 class ClientAccessibilityService : AccessibilityService() {
 
     override fun onAccessibilityEvent(event: AccessibilityEvent) {
-        when (event.eventType) {
-            AccessibilityEvent.TYPE_NOTIFICATION_STATE_CHANGED -> {
-                Log.d(TAG, "Notification received: ${event.parcelableData}")
-                // TODO: Send notification data to server
-            }
-            AccessibilityEvent.TYPE_VIEW_CLICKED -> {
-                Log.d(TAG, "View clicked: ${event.className}")
-            }
-        }
+        if (event.eventType != AccessibilityEvent.TYPE_NOTIFICATION_STATE_CHANGED) return
+        val notification = event.parcelableData as? Notification ?: return
+        val extras = notification.extras
+        val title = extras.getCharSequence(Notification.EXTRA_TITLE)?.toString().orEmpty()
+        val text = extras.getCharSequence(Notification.EXTRA_TEXT)?.toString().orEmpty()
+        if (title.isBlank() && text.isBlank()) return
+
+        NetworkManager.client.sendMessage(
+            StreamMessage.Notification(
+                id = UUID.randomUUID().toString(),
+                packageName = event.packageName?.toString() ?: packageName,
+                title = title.ifBlank { "Notification" },
+                text = text,
+                timestamp = System.currentTimeMillis()
+            )
+        )
     }
 
     override fun onInterrupt() {
-        Log.d(TAG, "Service Interrupted")
+        Log.d(TAG, "Service interrupted")
     }
 
     override fun onServiceConnected() {
         super.onServiceConnected()
-        Log.d(TAG, "Service Connected")
         instance = this
+        Log.d(TAG, "Accessibility service connected")
     }
 
     override fun onDestroy() {
+        if (instance === this) instance = null
         super.onDestroy()
-        instance = null
     }
 
     /**
-     * Injects a tap event at the specified normalized coordinates.
-     * @param normalizedX X coordinate from 0.0 to 1.0
-     * @param normalizedY Y coordinate from 0.0 to 1.0
+     * Injects a tap at normalized coordinates in the range 0..1.
      */
     fun injectTap(normalizedX: Float, normalizedY: Float) {
         val metrics = resources.displayMetrics
-        val x = normalizedX * metrics.widthPixels
-        val y = normalizedY * metrics.heightPixels
-        
-        val path = Path()
-        path.moveTo(x, y)
-        val gestureBuilder = GestureDescription.Builder()
-        gestureBuilder.addStroke(GestureDescription.StrokeDescription(path, 0, 100))
-        dispatchGesture(gestureBuilder.build(), object : GestureResultCallback() {
+        val x = (normalizedX.coerceIn(0f, 1f) * metrics.widthPixels)
+        val y = (normalizedY.coerceIn(0f, 1f) * metrics.heightPixels)
+
+        val path = Path().apply { moveTo(x, y) }
+        val stroke = GestureDescription.StrokeDescription(path, 0, TAP_DURATION_MS)
+        val gesture = GestureDescription.Builder().addStroke(stroke).build()
+
+        val dispatched = dispatchGesture(gesture, object : GestureResultCallback() {
             override fun onCompleted(gestureDescription: GestureDescription?) {
-                super.onCompleted(gestureDescription)
-                Log.d(TAG, "Tap gesture completed at ($x, $y)")
+                Log.d(TAG, "Tap completed at ($x, $y)")
             }
 
             override fun onCancelled(gestureDescription: GestureDescription?) {
-                super.onCancelled(gestureDescription)
-                Log.d(TAG, "Tap gesture cancelled")
+                Log.w(TAG, "Tap cancelled at ($x, $y)")
             }
         }, null)
+
+        if (!dispatched && Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+            Log.w(TAG, "dispatchGesture returned false")
+        }
     }
 
     companion object {
         private const val TAG = "ClientAccessibility"
+        private const val TAP_DURATION_MS = 80L
+        @Volatile
         var instance: ClientAccessibilityService? = null
+            private set
     }
 }

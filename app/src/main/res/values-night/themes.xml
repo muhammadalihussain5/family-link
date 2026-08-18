@@ -2,8 +2,8 @@
     <style name="Theme.FamilyLink" parent="Theme.MaterialComponents.DayNight.NoActionBar">
         <item name="android:statusBarColor">@android:color/transparent</item>
         <item name="android:navigationBarColor">@android:color/transparent</item>
-        <item name="colorPrimary">@color/teal_deep</item>
+        <item name="colorPrimary">@color/teal_soft</item>
         <item name="colorSecondary">@color/coral</item>
-        <item name="android:windowBackground">@color/cream</item>
+        <item name="android:windowBackground">@color/ink</item>
     </style>
 </resources>
