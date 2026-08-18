@@ -25,7 +25,6 @@ import java.net.NetworkInterface
 import java.util.Collections
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicReference
-import kotlin.time.Duration.Companion.seconds
 
 class SocketServer(val port: Int = 8080) {
     private var server: EmbeddedServer<*, *>? = null
@@ -58,8 +57,8 @@ class SocketServer(val port: Int = 8080) {
         server = embeddedServer(Netty, port = port, host = "0.0.0.0") {
             install(WebSockets) {
                 contentConverter = KotlinxWebsocketSerializationConverter(JsonConfig.json)
-                pingPeriod = 15.seconds
-                timeout = 30.seconds
+                pingPeriodMillis = 15_000L
+                timeoutMillis = 30_000L
             }
             routing {
                 webSocket("/link") {

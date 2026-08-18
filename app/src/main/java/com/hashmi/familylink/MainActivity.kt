@@ -46,7 +46,8 @@ class MainActivity : ComponentActivity() {
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background
                 ) {
-                    when (appMode) {
+                    val mode = appMode
+                    when (mode) {
                         null -> {
                             Box(
                                 modifier = Modifier.fillMaxSize(),
@@ -65,7 +66,7 @@ class MainActivity : ComponentActivity() {
                                 }
                             )
                         }
-                        else -> MainNavigation(appMode)
+                        else -> MainNavigation(mode)
                     }
                 }
             }
