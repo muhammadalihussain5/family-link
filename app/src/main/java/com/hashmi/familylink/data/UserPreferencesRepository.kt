@@ -28,6 +28,14 @@ class UserPreferencesRepository(private val context: Context) {
         val LAST_SERVER_HOST = stringPreferencesKey("last_server_host")
         val LAST_SERVER_PORT = intPreferencesKey("last_server_port")
         val LAST_SERVER_NAME = stringPreferencesKey("last_server_name")
+        val PAIRED_HUB_ID = stringPreferencesKey("paired_hub_id")
+        val PAIRED_HUB_HOST = stringPreferencesKey("paired_hub_host")
+        val PAIRED_HUB_PORT = intPreferencesKey("paired_hub_port")
+        val PAIRED_HUB_NAME = stringPreferencesKey("paired_hub_name")
+        val PAIRED_HUB_KEY = stringPreferencesKey("paired_hub_key")
+        val RELAY_URL = stringPreferencesKey("relay_url")
+        val PROJECTION_GRANT_CODE = intPreferencesKey("projection_grant_code")
+        val PROJECTION_GRANT_DATA = stringPreferencesKey("projection_grant_data")
     }
 
     val appModeFlow: Flow<AppMode> = context.dataStore.data.map { preferences ->
@@ -51,6 +59,26 @@ class UserPreferencesRepository(private val context: Context) {
             pairingKey = key,
             deviceName = preferences[Keys.AUTHORIZED_DEVICE_NAME].orEmpty()
         )
+    }
+
+    /**
+     * The hub this client has paired with (set only after the hub accepted
+     * a handshake), or null while unpaired.
+     */
+    val pairedHubFlow: Flow<PairedHub?> = context.dataStore.data.map { preferences ->
+        val id = preferences[Keys.PAIRED_HUB_ID] ?: return@map null
+        PairedHub(
+            hubDeviceId = id,
+            host = preferences[Keys.PAIRED_HUB_HOST],
+            port = preferences[Keys.PAIRED_HUB_PORT] ?: QrPayload.DEFAULT_PORT,
+            serverName = preferences[Keys.PAIRED_HUB_NAME].orEmpty().ifBlank { "Family Hub" },
+            serverKey = preferences[Keys.PAIRED_HUB_KEY].orEmpty()
+        )
+    }
+
+    /** URL (ws:// or wss://) of the internet relay server, blank when unused. */
+    val relayUrlFlow: Flow<String> = context.dataStore.data.map { preferences ->
+        preferences[Keys.RELAY_URL].orEmpty().trim()
     }
 
     val lastServerHostFlow: Flow<String?> = context.dataStore.data.map { it[Keys.LAST_SERVER_HOST] }
@@ -96,6 +124,68 @@ class UserPreferencesRepository(private val context: Context) {
         }
     }
 
+    suspend fun setPairedHub(
+        hubDeviceId: String,
+        host: String?,
+        port: Int,
+        serverName: String,
+        serverKey: String
+    ) {
+        context.dataStore.edit { preferences ->
+            preferences[Keys.PAIRED_HUB_ID] = hubDeviceId
+            if (host.isNullOrBlank()) preferences.remove(Keys.PAIRED_HUB_HOST) else preferences[Keys.PAIRED_HUB_HOST] = host
+            preferences[Keys.PAIRED_HUB_PORT] = port
+            preferences[Keys.PAIRED_HUB_NAME] = serverName
+            preferences[Keys.PAIRED_HUB_KEY] = serverKey
+        }
+    }
+
+    suspend fun clearPairedHub() {
+        context.dataStore.edit { preferences ->
+            preferences.remove(Keys.PAIRED_HUB_ID)
+            preferences.remove(Keys.PAIRED_HUB_HOST)
+            preferences.remove(Keys.PAIRED_HUB_PORT)
+            preferences.remove(Keys.PAIRED_HUB_NAME)
+            preferences.remove(Keys.PAIRED_HUB_KEY)
+            preferences.remove(Keys.LAST_SERVER_HOST)
+            preferences.remove(Keys.LAST_SERVER_PORT)
+            preferences.remove(Keys.LAST_SERVER_NAME)
+        }
+    }
+
+    suspend fun updateRelayUrl(url: String) {
+        val cleaned = url.trim()
+        context.dataStore.edit { preferences ->
+            if (cleaned.isBlank()) {
+                preferences.remove(Keys.RELAY_URL)
+            } else {
+                preferences[Keys.RELAY_URL] = cleaned
+            }
+        }
+    }
+
+    suspend fun saveProjectionGrant(grant: ProjectionGrant) {
+        context.dataStore.edit { preferences ->
+            preferences[Keys.PROJECTION_GRANT_CODE] = grant.resultCode
+            preferences[Keys.PROJECTION_GRANT_DATA] = grant.resultDataUri
+        }
+    }
+
+    suspend fun projectionGrant(): ProjectionGrant? {
+        val prefs = context.dataStore.data.first()
+        val uri = prefs[Keys.PROJECTION_GRANT_DATA] ?: return null
+        val code = prefs[Keys.PROJECTION_GRANT_CODE] ?: -1
+        if (uri.isBlank() || code <= 0) return null
+        return ProjectionGrant(code, uri)
+    }
+
+    suspend fun clearProjectionGrant() {
+        context.dataStore.edit { preferences ->
+            preferences.remove(Keys.PROJECTION_GRANT_CODE)
+            preferences.remove(Keys.PROJECTION_GRANT_DATA)
+        }
+    }
+
     suspend fun setLastServer(host: String, port: Int, name: String) {
         context.dataStore.edit { preferences ->
             preferences[Keys.LAST_SERVER_HOST] = host
@@ -120,6 +210,12 @@ class UserPreferencesRepository(private val context: Context) {
             preferences.remove(Keys.LAST_SERVER_HOST)
             preferences.remove(Keys.LAST_SERVER_PORT)
             preferences.remove(Keys.LAST_SERVER_NAME)
+            preferences.remove(Keys.PAIRED_HUB_ID)
+            preferences.remove(Keys.PAIRED_HUB_HOST)
+            preferences.remove(Keys.PAIRED_HUB_PORT)
+            preferences.remove(Keys.PAIRED_HUB_NAME)
+            preferences.remove(Keys.PAIRED_HUB_KEY)
+            preferences.remove(Keys.RELAY_URL)
         }
     }
 

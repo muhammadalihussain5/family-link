@@ -43,6 +43,41 @@ class SerializationTest {
     }
 
     @Test
+    fun handshakeAckCarriesHubIdentity() {
+        val message = StreamMessage.HandshakeAck(
+            accepted = true,
+            serverName = "Family Hub",
+            serverDeviceId = "hub-1",
+            serverPairingKey = "ZZ11-ZZ22"
+        )
+        val encoded = json.encodeToString(StreamMessage.serializer(), message)
+        val decoded = json.decodeFromString(StreamMessage.serializer(), encoded)
+        assertEquals(message, decoded)
+        assertTrue(encoded.contains("hub-1"))
+    }
+
+    @Test
+    fun unpairRoundTrip() {
+        val message = StreamMessage.Unpair("dev-1")
+        val encoded = json.encodeToString(StreamMessage.serializer(), message)
+        val decoded = json.decodeFromString(StreamMessage.serializer(), encoded)
+        assertEquals(message, decoded)
+    }
+
+    @Test
+    fun audioChunkRoundTrip() {
+        val message = StreamMessage.AudioChunk(
+            data = byteArrayOf(1, 2, 3, 4),
+            sampleRate = 16_000,
+            encoding = 2,
+            channelMask = 16
+        )
+        val encoded = json.encodeToString(StreamMessage.serializer(), message)
+        val decoded = json.decodeFromString(StreamMessage.serializer(), encoded)
+        assertEquals(message, decoded)
+    }
+
+    @Test
     fun tapEventRoundTrip() {
         val message = StreamMessage.TapEvent(0.25f, 0.75f)
         val encoded = json.encodeToString(StreamMessage.serializer(), message)

@@ -6,4 +6,12 @@
         <item name="colorSecondary">@color/coral</item>
         <item name="android:windowBackground">@color/cream</item>
     </style>
+
+    <!-- Borderless approval sheet shown when the hub requests screen sharing. -->
+    <style name="Theme.FamilyLink.CastApproval">
+        <item name="android:windowIsTranslucent">true</item>
+        <item name="android:windowBackground">@android:color/transparent</item>
+        <item name="android:windowNoTitle">true</item>
+        <item name="android:backgroundDimEnabled">true</item>
+    </style>
 </resources>

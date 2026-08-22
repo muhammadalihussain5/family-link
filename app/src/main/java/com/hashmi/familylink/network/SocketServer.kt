@@ -15,6 +15,7 @@ import io.ktor.server.websocket.WebSockets
 import io.ktor.server.websocket.receiveDeserialized
 import io.ktor.server.websocket.sendSerialized
 import io.ktor.server.websocket.webSocket
+import io.ktor.websocket.CloseReason
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asSharedFlow
@@ -38,16 +39,44 @@ class SocketServer(val port: Int = 8080) {
     private val _linkedClient = MutableStateFlow<LinkedSession?>(null)
     val linkedClient = _linkedClient.asStateFlow()
 
-    private val sessions = ConcurrentHashMap.newKeySet<DefaultWebSocketServerSession>()
+    /** Tunnel to the optional internet relay server (see [RelayHubTunnel]). */
+    val relay = RelayHubTunnel(this)
+
+    private val handles = ConcurrentHashMap<String, HubHandle>()
     private val authorizedKey = AtomicReference<String?>(null)
     private val serverName = AtomicReference("Family Hub")
+    private val hubDeviceId = AtomicReference("")
+    private val hubPairingKey = AtomicReference("")
+
+    /**
+     * One connected client, either a LAN WebSocket session or a virtual
+     * session piped through the internet relay.
+     */
+    abstract class HubHandle {
+        abstract val id: String
+        abstract fun post(message: StreamMessage)
+        open fun shutdown() {}
+    }
 
     fun updateAuthorizedKey(pairingKey: String?) {
-        authorizedKey.set(pairingKey?.takeIf { it.isNotBlank() })
+        val key = pairingKey?.takeIf { it.isNotBlank() }
+        authorizedKey.set(key)
+        if (key == null) {
+            _linkedClient.value = null
+            handles.values.forEach { it.shutdown() }
+            handles.clear()
+            _connectedClients.value = 0
+        }
     }
 
     fun updateServerName(name: String) {
         serverName.set(name.ifBlank { "Family Hub" })
+    }
+
+    /** The hub's own identity, echoed in handshake acks so clients know who they paired with. */
+    fun updateIdentity(deviceId: String, pairingKey: String) {
+        hubDeviceId.set(deviceId)
+        hubPairingKey.set(pairingKey)
     }
 
     @Synchronized
@@ -63,31 +92,35 @@ class SocketServer(val port: Int = 8080) {
             routing {
                 webSocket("/link") {
                     Log.d(TAG, "Client socket opened")
-                    sessions.add(this)
-                    _connectedClients.value = sessions.size
+                    val handle = object : HubHandle() {
+                        override val id = "lan-${hashCode()}"
+                        override fun post(message: StreamMessage) {
+                            launch {
+                                try {
+                                    sendSerialized<StreamMessage>(message)
+                                } catch (e: Exception) {
+                                    Log.e(TAG, "Failed to send ${message::class.simpleName}", e)
+                                }
+                            }
+                        }
+                        override fun shutdown() {
+                            launch {
+                                runCatching {
+                                    close(CloseReason(CloseReason.Codes.GOING_AWAY, "Unpaired"))
+                                }
+                            }
+                        }
+                    }
+                    registerHandle(handle)
                     try {
                         while (true) {
                             val message = receiveDeserialized<StreamMessage>()
-                            when (message) {
-                                is StreamMessage.Handshake -> handleHandshake(this, message)
-                                is StreamMessage.Heartbeat -> Unit
-                                is StreamMessage.ScreenFrame -> {
-                                    _messages.emit(message)
-                                }
-                                else -> {
-                                    Log.d(TAG, "Received ${message::class.simpleName}")
-                                    _messages.emit(message)
-                                }
-                            }
+                            dispatch(handle, message)
                         }
                     } catch (e: Exception) {
                         Log.w(TAG, "WebSocket closed: ${e.message}")
                     } finally {
-                        sessions.remove(this)
-                        _connectedClients.value = sessions.size
-                        if (sessions.isEmpty()) {
-                            _linkedClient.value = null
-                        }
+                        unregisterHandle(handle)
                         Log.d(TAG, "Client disconnected")
                     }
                 }
@@ -96,58 +129,77 @@ class SocketServer(val port: Int = 8080) {
         Log.d(TAG, "Server started on ${getLocalIpAddress()}:$port")
     }
 
-    private suspend fun handleHandshake(
-        session: DefaultWebSocketServerSession,
-        handshake: StreamMessage.Handshake
-    ) {
-        val expected = authorizedKey.get()
-        val accepted = expected.isNullOrBlank() ||
-            expected.equals(handshake.pairingKey, ignoreCase = true)
+    internal fun registerHandle(handle: HubHandle) {
+        handles[handle.id] = handle
+        _connectedClients.value = handles.size
+    }
 
-        if (accepted) {
-            if (expected.isNullOrBlank()) {
-                authorizedKey.set(handshake.pairingKey)
+    internal fun unregisterHandle(handle: HubHandle) {
+        if (handles.remove(handle.id) != null) {
+            _connectedClients.value = handles.size
+            if (handles.isEmpty()) {
+                _linkedClient.value = null
             }
-            _linkedClient.value = LinkedSession(
-                deviceId = handshake.deviceId,
-                deviceName = handshake.deviceName.ifBlank { "Family Device" }
-            )
-            session.sendSerialized<StreamMessage>(
-                StreamMessage.HandshakeAck(
-                    accepted = true,
-                    serverName = serverName.get()
-                )
-            )
-            _messages.emit(handshake)
-            Log.d(TAG, "Handshake accepted for ${handshake.deviceName}")
-        } else {
-            session.sendSerialized<StreamMessage>(
-                StreamMessage.HandshakeAck(
-                    accepted = false,
-                    reason = "Pairing key does not match this hub."
-                )
-            )
-            Log.w(TAG, "Handshake rejected for ${handshake.deviceName}")
         }
     }
 
-    fun broadcast(message: StreamMessage) {
-        sessions.forEach { session ->
-            session.launch {
-                try {
-                    session.sendSerialized<StreamMessage>(message)
-                } catch (e: Exception) {
-                    Log.e(TAG, "Failed to broadcast ${message::class.simpleName}", e)
-                }
-            }
+    /**
+     * Handles a message from any transport (LAN socket or relay tunnel).
+     * A handshake is only accepted when the hub has explicitly paired the
+     * device — the first arriving device is never adopted automatically.
+     */
+    internal suspend fun dispatch(handle: HubHandle, message: StreamMessage) {
+        when (message) {
+            is StreamMessage.Heartbeat -> Unit
+            is StreamMessage.Handshake -> handleHandshake(handle, message)
+            else -> _messages.emit(message)
         }
+    }
+
+    private suspend fun handleHandshake(
+        handle: HubHandle,
+        handshake: StreamMessage.Handshake
+    ) {
+        val expected = authorizedKey.get()
+        if (expected.isNullOrBlank() || !expected.equals(handshake.pairingKey, ignoreCase = true)) {
+            handle.post(
+                StreamMessage.HandshakeAck(
+                    accepted = false,
+                    reason = "This hub has not paired this device yet. " +
+                        "Open Family Link on the hub and scan the device QR (or enter its key) first."
+                )
+            )
+            Log.w(TAG, "Handshake rejected for ${handshake.deviceName}")
+            return
+        }
+
+        _linkedClient.value = LinkedSession(
+            deviceId = handshake.deviceId,
+            deviceName = handshake.deviceName.ifBlank { "Family Device" }
+        )
+        handle.post(
+            StreamMessage.HandshakeAck(
+                accepted = true,
+                serverName = serverName.get(),
+                serverDeviceId = hubDeviceId.get(),
+                serverPairingKey = hubPairingKey.get()
+            )
+        )
+        _messages.emit(handshake)
+        Log.d(TAG, "Handshake accepted for ${handshake.deviceName}")
+    }
+
+    fun broadcast(message: StreamMessage) {
+        handles.values.forEach { handle -> handle.post(message) }
     }
 
     @Synchronized
     fun stop() {
+        relay.stop()
         server?.stop(500, 1_000)
         server = null
-        sessions.clear()
+        handles.values.forEach { it.shutdown() }
+        handles.clear()
         _connectedClients.value = 0
         _linkedClient.value = null
     }
