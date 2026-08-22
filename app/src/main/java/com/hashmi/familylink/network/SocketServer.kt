@@ -92,21 +92,24 @@ class SocketServer(val port: Int = 8080) {
             routing {
                 webSocket("/link") {
                     Log.d(TAG, "Client socket opened")
+                    val session = this
                     val handle = object : HubHandle() {
-                        override val id = "lan-${hashCode()}"
+                        override val id = "lan-${session.hashCode()}"
                         override fun post(message: StreamMessage) {
-                            launch {
+                            session.launch {
                                 try {
-                                    sendSerialized<StreamMessage>(message)
+                                    session.sendSerialized<StreamMessage>(message)
                                 } catch (e: Exception) {
                                     Log.e(TAG, "Failed to send ${message::class.simpleName}", e)
                                 }
                             }
                         }
                         override fun shutdown() {
-                            launch {
+                            session.launch {
                                 runCatching {
-                                    close(CloseReason(CloseReason.Codes.GOING_AWAY, "Unpaired"))
+                                    session.close(
+                                        CloseReason(CloseReason.Codes.GOING_AWAY, "Unpaired")
+                                    )
                                 }
                             }
                         }
