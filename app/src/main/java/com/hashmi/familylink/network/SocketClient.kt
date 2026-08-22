@@ -40,6 +40,9 @@ class SocketClient {
     private var currentPort: Int = 8080
     private var handshake: StreamMessage.Handshake? = null
 
+    @Volatile
+    private var authRejected = false
+
     private val _isConnected = MutableStateFlow(false)
     val isConnected = _isConnected.asStateFlow()
 
@@ -57,6 +60,7 @@ class SocketClient {
                     return@launch
                 }
                 connectJob?.cancel()
+                authRejected = false
                 currentHost = host
                 currentPort = port
                 this@SocketClient.handshake = handshake
@@ -67,6 +71,10 @@ class SocketClient {
 
     private suspend fun connectionLoop(host: String, port: Int) {
         while (true) {
+            if (authRejected) {
+                Log.w(TAG, "Pairing key was rejected by the hub; not reconnecting.")
+                break
+            }
             try {
                 Log.d(TAG, "Connecting to $host:$port")
                 client.webSocket(host = host, port = port, path = "/link") {
@@ -94,6 +102,8 @@ class SocketClient {
                             }
                             if (message is StreamMessage.HandshakeAck && !message.accepted) {
                                 Log.w(TAG, "Handshake rejected: ${message.reason}")
+                                authRejected = true
+                                break
                             }
                         }
                     } finally {

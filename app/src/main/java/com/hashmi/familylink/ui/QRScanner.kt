@@ -1,6 +1,8 @@
 package com.hashmi.familylink.ui
 
 import android.Manifest
+import android.graphics.Bitmap
+import android.graphics.Matrix
 import android.util.Log
 import android.view.ViewGroup
 import androidx.camera.core.CameraSelector
@@ -21,7 +23,6 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -40,7 +41,7 @@ import com.google.zxing.BarcodeFormat
 import com.google.zxing.BinaryBitmap
 import com.google.zxing.DecodeHintType
 import com.google.zxing.MultiFormatReader
-import com.google.zxing.PlanarYUVLuminanceSource
+import com.google.zxing.RGBLuminanceSource
 import com.google.zxing.common.HybridBinarizer
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
@@ -123,43 +124,25 @@ private fun CameraQrScanner(
             modifier = Modifier.fillMaxSize(),
             update = { previewView ->
                 if (bound) return@AndroidView
+                // Set synchronously so a recomposition can't register the listener twice.
+                bound = true
                 cameraProviderFuture.addListener({
-                    val cameraProvider = cameraProviderFuture.get()
-                    val preview = Preview.Builder().build().also {
-                        it.setSurfaceProvider(previewView.surfaceProvider)
-                    }
-                    val analysis = ImageAnalysis.Builder()
-                        .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
-                        .build()
-                    analysis.setAnalyzer(executor) { imageProxy ->
-                        try {
-                            if (handled.get()) return@setAnalyzer
-                            val buffer = imageProxy.planes[0].buffer
-                            val data = ByteArray(buffer.remaining())
-                            buffer.get(data)
-                            val source = PlanarYUVLuminanceSource(
-                                data,
-                                imageProxy.width,
-                                imageProxy.height,
-                                0,
-                                0,
-                                imageProxy.width,
-                                imageProxy.height,
-                                false
-                            )
-                            val bitmap = BinaryBitmap(HybridBinarizer(source))
-                            val result = reader.decodeWithState(bitmap)
-                            if (handled.compareAndSet(false, true)) {
-                                previewView.post { onResult(result.text) }
-                            }
-                        } catch (_: Exception) {
-                            reader.reset()
-                        } finally {
-                            imageProxy.close()
-                        }
-                    }
-
                     try {
+                        val cameraProvider = cameraProviderFuture.get()
+                        val preview = Preview.Builder().build().also {
+                            it.setSurfaceProvider(previewView.surfaceProvider)
+                        }
+                        val analysis = ImageAnalysis.Builder()
+                            .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+                            .build()
+                        analysis.setAnalyzer(executor) { imageProxy ->
+                            val decoded = decodeQr(imageProxy, reader)
+                            imageProxy.close()
+                            if (decoded != null && handled.compareAndSet(false, true)) {
+                                previewView.post { onResult(decoded) }
+                            }
+                        }
+
                         cameraProvider.unbindAll()
                         cameraProvider.bindToLifecycle(
                             lifecycleOwner,
@@ -167,8 +150,9 @@ private fun CameraQrScanner(
                             preview,
                             analysis
                         )
-                        bound = true
                     } catch (e: Exception) {
+                        // Allow a later update pass to retry the bind.
+                        bound = false
                         Log.e("QRScanner", "Use case binding failed", e)
                     }
                 }, ContextCompat.getMainExecutor(context))
@@ -186,9 +170,45 @@ private fun CameraQrScanner(
             }
         }
     }
+}
 
-    LaunchedEffect(Unit) {
-        // Re-enable scanning if the composable is shown again.
-        handled.set(false)
+/**
+ * Decodes a QR code from a CameraX frame.
+ *
+ * CameraX hands analysis frames over in YUV_420_888 and, in portrait, rotated by
+ * 90/270 degrees. Feeding the raw Y plane to ZXing (as before) therefore almost
+ * never succeeds. Convert to an upright RGB bitmap first and decode that.
+ */
+private fun decodeQr(imageProxy: androidx.camera.core.ImageProxy, reader: MultiFormatReader): String? {
+    return try {
+        if (imageProxy.width <= 0 || imageProxy.height <= 0) return null
+
+        val rotation = imageProxy.imageInfo.rotationDegrees
+        val source = imageProxy.toBitmap()
+        val upright = if (rotation != 0) {
+            val matrix = Matrix().apply { postRotate(rotation.toFloat()) }
+            Bitmap.createBitmap(source, 0, 0, source.width, source.height, matrix, true)
+        } else {
+            source
+        }
+        if (upright !== source) {
+            source.recycle()
+        }
+
+        try {
+            val pixels = IntArray(upright.width * upright.height)
+            upright.getPixels(pixels, 0, upright.width, 0, 0, upright.width, upright.height)
+            val binary = BinaryBitmap(
+                HybridBinarizer(
+                    RGBLuminanceSource(upright.width, upright.height, pixels)
+                )
+            )
+            reader.decodeWithState(binary).text
+        } finally {
+            upright.recycle()
+        }
+    } catch (_: Exception) {
+        reader.reset()
+        null
     }
 }

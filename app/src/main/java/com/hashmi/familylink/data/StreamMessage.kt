@@ -64,6 +64,19 @@ sealed class StreamMessage {
         val y: Float
     ) : StreamMessage()
 
+    /**
+     * A swipe/drag gesture from (startX, startY) to (endX, endY),
+     * both in normalized 0..1 coordinates of the client screen.
+     */
+    @Serializable
+    data class SwipeEvent(
+        val startX: Float,
+        val startY: Float,
+        val endX: Float,
+        val endY: Float,
+        val durationMs: Long = 300L
+    ) : StreamMessage()
+
     @Serializable
     data object Heartbeat : StreamMessage()
 }

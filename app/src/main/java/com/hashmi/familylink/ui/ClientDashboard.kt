@@ -24,6 +24,7 @@ import androidx.compose.material.icons.automirrored.rounded.ScreenShare
 import androidx.compose.material.icons.rounded.QrCodeScanner
 import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material.icons.rounded.Stop
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -33,8 +34,10 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -79,6 +82,7 @@ fun ClientMainScreen(
     val isConnected by client.isConnected.collectAsStateWithLifecycle()
     var isMirroring by remember { mutableStateOf(false) }
     var isScanning by remember { mutableStateOf(false) }
+    var showAddressDialog by remember { mutableStateOf(false) }
 
     val mediaProjectionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.StartActivityForResult()
@@ -241,6 +245,14 @@ fun ClientMainScreen(
 
                 Spacer(modifier = Modifier.height(12.dp))
                 OutlinedButton(
+                    onClick = { showAddressDialog = true },
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text("Connect by address")
+                }
+
+                Spacer(modifier = Modifier.height(8.dp))
+                OutlinedButton(
                     onClick = onNavigateToPermissions,
                     modifier = Modifier.fillMaxWidth()
                 ) {
@@ -248,6 +260,55 @@ fun ClientMainScreen(
                 }
             }
         }
+    }
+
+    if (showAddressDialog) {
+        var hostDraft by remember { mutableStateOf("") }
+        var portDraft by remember { mutableStateOf("8080") }
+        AlertDialog(
+            onDismissRequest = { showAddressDialog = false },
+            title = { Text("Connect to a hub") },
+            text = {
+                Column {
+                    Text(
+                        "Enter the hub's address. On the same Wi-Fi use its local IP " +
+                            "(shown on the hub). Over the internet use its public address " +
+                            "with port forwarding. Your pairing key is sent automatically."
+                    )
+                    Spacer(modifier = Modifier.height(12.dp))
+                    OutlinedTextField(
+                        value = hostDraft,
+                        onValueChange = { hostDraft = it.trim() },
+                        label = { Text("Host (IP or domain)") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    OutlinedTextField(
+                        value = portDraft,
+                        onValueChange = { portDraft = it.filter { c -> c.isDigit() }.take(5) },
+                        label = { Text("Port") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    val host = hostDraft.trim()
+                    val port = portDraft.toIntOrNull()
+                    if (host.isNotBlank() && port != null && port in 1..65535) {
+                        ClientLinkService.start(context, host, port)
+                        showAddressDialog = false
+                    } else {
+                        Toast.makeText(context, "Enter a valid host and port.", Toast.LENGTH_SHORT).show()
+                    }
+                }) { Text("Connect") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showAddressDialog = false }) { Text("Cancel") }
+            }
+        )
     }
 }
 

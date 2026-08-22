@@ -152,18 +152,43 @@ class SocketServer(val port: Int = 8080) {
         _linkedClient.value = null
     }
 
+    /**
+     * Returns the IPv4 address that a client should connect to.
+     *
+     * Prefers Wi‑Fi / Ethernet interfaces and skips cellular (rmnet/ccmni/radio),
+     * VPN (tun/ppp) and other virtual interfaces, because a phone with mobile
+     * data enabled otherwise often reports its cellular address first — which a
+     * client on the same Wi‑Fi cannot reach.
+     */
     fun getLocalIpAddress(): String? {
         return try {
             val interfaces = Collections.list(NetworkInterface.getNetworkInterfaces())
+            var fallback: String? = null
             for (intf in interfaces) {
                 if (!intf.isUp || intf.isLoopback) continue
+
+                val name = intf.name.lowercase()
+                val preferred = name.contains("wlan") || name.contains("wifi") ||
+                    name.contains("eth") || name.contains("lan") ||
+                    name.contains("ap") || name.startsWith("en")
+                val excluded = name.contains("rmnet") || name.contains("ccmni") ||
+                    name.contains("radio") || name.contains("p2p") ||
+                    name.contains("tun") || name.contains("ppp") ||
+                    name.contains("dummy") || name.contains("sit") ||
+                    name.contains("veth") || name.contains("br-") ||
+                    name.contains("docker")
+                if (excluded) continue
+
                 val addrs = Collections.list(intf.inetAddresses)
                 for (addr in addrs) {
                     if (addr.isLoopbackAddress || addr.isLinkLocalAddress) continue
-                    if (addr is Inet4Address) return addr.hostAddress
+                    if (addr is Inet4Address) {
+                        if (preferred) return addr.hostAddress
+                        if (fallback == null) fallback = addr.hostAddress
+                    }
                 }
             }
-            null
+            fallback
         } catch (e: Exception) {
             Log.e(TAG, "Error getting IP", e)
             null

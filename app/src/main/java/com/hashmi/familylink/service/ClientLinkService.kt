@@ -87,6 +87,15 @@ class ClientLinkService : Service() {
                     is StreamMessage.TapEvent -> {
                         ClientAccessibilityService.instance?.injectTap(message.x, message.y)
                     }
+                    is StreamMessage.SwipeEvent -> {
+                        ClientAccessibilityService.instance?.injectSwipe(
+                            startX = message.startX,
+                            startY = message.startY,
+                            endX = message.endX,
+                            endY = message.endY,
+                            durationMs = message.durationMs
+                        )
+                    }
                     is StreamMessage.HandshakeAck -> {
                         if (message.accepted && message.serverName.isNotBlank()) {
                             Log.d(TAG, "Paired with ${message.serverName}")

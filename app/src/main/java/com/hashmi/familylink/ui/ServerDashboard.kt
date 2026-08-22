@@ -5,6 +5,7 @@ import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -56,12 +57,14 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalViewConfiguration
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
@@ -271,6 +274,9 @@ fun ServerMainScreen(
                             frame = latestFrame,
                             onTap = { x, y ->
                                 server.broadcast(StreamMessage.TapEvent(x, y))
+                            },
+                            onSwipe = { sx, sy, ex, ey ->
+                                server.broadcast(StreamMessage.SwipeEvent(sx, sy, ex, ey))
                             }
                         )
                     } else {
@@ -360,9 +366,11 @@ fun ServerMainScreen(
 fun MirroredScreen(
     frame: StreamMessage.ScreenFrame?,
     onTap: (Float, Float) -> Unit,
+    onSwipe: (Float, Float, Float, Float) -> Unit = { _, _, _, _ -> },
     modifier: Modifier = Modifier
 ) {
     var imageSize by remember { mutableStateOf(IntSize.Zero) }
+    val viewConfiguration = LocalViewConfiguration.current
 
     Box(
         modifier = modifier
@@ -392,6 +400,47 @@ fun MirroredScreen(
                                         offset.y / imageSize.height
                                     )
                                 }
+                            }
+                        }
+                        .pointerInput(Unit) {
+                            var dragStart: Offset? = null
+                            var dragEnd: Offset? = null
+                            detectDragGestures(
+                                onDragStart = { dragStart = it },
+                                onDragEnd = {
+                                    val start = dragStart
+                                    val end = dragEnd
+                                    if (start != null && end != null &&
+                                        imageSize.width > 0 && imageSize.height > 0
+                                    ) {
+                                        val dx = end.x - start.x
+                                        val dy = end.y - start.y
+                                        val slop = viewConfiguration.touchSlop.toFloat()
+                                        if (dx * dx + dy * dy >= slop * slop * 4f) {
+                                            onSwipe(
+                                                (start.x / imageSize.width).coerceIn(0f, 1f),
+                                                (start.y / imageSize.height).coerceIn(0f, 1f),
+                                                (end.x / imageSize.width).coerceIn(0f, 1f),
+                                                (end.y / imageSize.height).coerceIn(0f, 1f)
+                                            )
+                                        } else {
+                                            // Tiny movement: treat it as a tap.
+                                            onTap(
+                                                (end.x / imageSize.width).coerceIn(0f, 1f),
+                                                (end.y / imageSize.height).coerceIn(0f, 1f)
+                                            )
+                                        }
+                                    }
+                                    dragStart = null
+                                    dragEnd = null
+                                },
+                                onDragCancel = {
+                                    dragStart = null
+                                    dragEnd = null
+                                }
+                            ) { change, _ ->
+                                dragEnd = change.position
+                                change.consume()
                             }
                         },
                     contentScale = ContentScale.Fit
