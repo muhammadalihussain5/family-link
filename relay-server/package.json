@@ -1,0 +1,17 @@
+{
+  "name": "family-link-relay",
+  "version": "1.0.0",
+  "description": "WebSocket relay that lets Family Link hub and client apps stay linked over the internet. Both devices dial out; no port forwarding needed.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node test/relay.test.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  },
+  "license": "MIT"
+}

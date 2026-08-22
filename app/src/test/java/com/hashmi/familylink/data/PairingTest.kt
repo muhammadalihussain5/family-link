@@ -42,6 +42,22 @@ class PairingTest {
     }
 
     @Test
+    fun serverInviteCarriesHubIdentityForDisconnectConfirmation() {
+        val payload = QrPayload.server(
+            host = "192.168.0.12",
+            port = 8080,
+            serverName = "Family Hub",
+            deviceId = "hub-id-1",
+            pairingKey = "ZZ11-ZZ22"
+        )
+        val decoded = decodeQrPayload(encodeQrPayload(payload))
+        assertNotNull(decoded)
+        assertTrue(decoded!!.isServerInvite())
+        assertEquals("hub-id-1", decoded.deviceId)
+        assertEquals("ZZ11-ZZ22", decoded.pairingKey)
+    }
+
+    @Test
     fun barePairingKeyIsAccepted() {
         val decoded = decodeQrPayload("ab12-cd34")
         assertNotNull(decoded)
@@ -63,6 +79,22 @@ class PairingTest {
         assertEquals("10.0.0.4", beacon!!.host)
         assertEquals(8080, beacon.port)
         assertEquals("Kitchen Hub", beacon.serverName)
+    }
+
+    @Test
+    fun discoveryBeaconIncludesHubDeviceId() {
+        val beacon = DiscoveryProtocol.decode(
+            DiscoveryProtocol.encode("10.0.0.4", 8080, "Kitchen Hub", "hub-42")
+        )
+        assertNotNull(beacon)
+        assertEquals("hub-42", beacon!!.deviceId)
+    }
+
+    @Test
+    fun oldBeaconWithoutDeviceIdStillDecodes() {
+        val beacon = DiscoveryProtocol.decode("FLINK|10.0.0.4|8080|Kitchen Hub")
+        assertNotNull(beacon)
+        assertNull(beacon!!.deviceId)
     }
 
     @Test

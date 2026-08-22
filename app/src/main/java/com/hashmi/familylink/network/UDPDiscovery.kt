@@ -21,8 +21,8 @@ class UDPDiscovery {
     private var broadcastSocket: DatagramSocket? = null
     private var listenSocket: DatagramSocket? = null
 
-    fun startBroadcasting(host: String, port: Int, serverName: String) {
-        val payload = DiscoveryProtocol.encode(host, port, serverName)
+    fun startBroadcasting(host: String, port: Int, serverName: String, deviceId: String = "") {
+        val payload = DiscoveryProtocol.encode(host, port, serverName, deviceId)
         if (broadcastJob?.isActive == true) return
 
         broadcastJob = scope.launch {

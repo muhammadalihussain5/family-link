@@ -29,6 +29,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Accessibility
 import androidx.compose.material.icons.filled.BatteryChargingFull
+import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.NotificationsActive
 import androidx.compose.material.icons.rounded.CheckCircle
@@ -72,7 +73,7 @@ fun PermissionScreen(
     val criticalGranted = permissionsState.filter { it.required }.all { it.isGranted }
     val scrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
 
-    val notificationPermissionLauncher = rememberLauncherForActivityResult(
+    val runtimePermissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) {
         permissionsState = getPermissionsState(context)
@@ -135,12 +136,13 @@ fun PermissionScreen(
                 PermissionItem(
                     item = item,
                     onGrantClick = {
-                        if (item.id == "post_notifications" &&
-                            Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU
-                        ) {
-                            notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
-                        } else {
-                            handlePermissionGrant(context, item)
+                        when {
+                            item.id == "post_notifications" &&
+                                Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU ->
+                                runtimePermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                            item.id == "record_audio" ->
+                                runtimePermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                            else -> handlePermissionGrant(context, item)
                         }
                     }
                 )
@@ -265,6 +267,20 @@ fun getPermissionsState(context: Context): List<PermissionStatus> {
             )
         )
     }
+
+    state.add(
+        PermissionStatus(
+            id = "record_audio",
+            title = "Microphone (audio sharing)",
+            description = "Lets the hub listen to this device's audio while the screen is shared (Android 10+).",
+            icon = Icons.Default.Mic,
+            isGranted = ContextCompat.checkSelfPermission(
+                context,
+                Manifest.permission.RECORD_AUDIO
+            ) == PackageManager.PERMISSION_GRANTED,
+            required = false
+        )
+    )
 
     val powerManager = context.getSystemService(Context.POWER_SERVICE) as PowerManager
     state.add(

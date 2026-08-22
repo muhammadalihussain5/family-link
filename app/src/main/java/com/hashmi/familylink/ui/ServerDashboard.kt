@@ -24,11 +24,16 @@ import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ScreenShare
+import androidx.compose.material.icons.rounded.PlayCircle
 import androidx.compose.material.icons.rounded.QrCode2
 import androidx.compose.material.icons.rounded.QrCodeScanner
 import androidx.compose.material.icons.rounded.Settings
+import androidx.compose.material.icons.rounded.Stop
+import androidx.compose.material.icons.rounded.VolumeOff
+import androidx.compose.material.icons.rounded.VolumeUp
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -41,6 +46,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.adaptive.ExperimentalMaterial3AdaptiveApi
@@ -69,14 +75,17 @@ import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.hashmi.familylink.audio.AudioPlayer
 import com.hashmi.familylink.data.QrPayload
 import com.hashmi.familylink.data.StreamMessage
 import com.hashmi.familylink.data.UserPreferencesRepository
 import com.hashmi.familylink.data.decodeQrPayload
 import com.hashmi.familylink.data.encodeQrPayload
 import com.hashmi.familylink.network.NetworkManager
+import com.hashmi.familylink.network.RelayHubTunnel
 import com.hashmi.familylink.service.ServerLinkService
 import com.hashmi.familylink.ui.theme.FamilyLinkTheme
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalMaterial3AdaptiveApi::class)
@@ -96,11 +105,25 @@ fun ServerMainScreen(
     var showInvite by remember { mutableStateOf(false) }
     var showManualKey by remember { mutableStateOf(false) }
     var serverIp by remember { mutableStateOf<String?>(null) }
+    var audioEnabled by remember { mutableStateOf(true) }
+    var lastFrameAtMillis by remember { mutableStateOf(0L) }
+    var screenLive by remember { mutableStateOf(false) }
     val deviceName by prefs.deviceNameFlow.collectAsStateWithLifecycle(initialValue = "")
+    val deviceId by prefs.deviceIdFlow.collectAsStateWithLifecycle(initialValue = null)
 
     val navigator = rememberListDetailPaneScaffoldNavigator<Nothing>()
     val connectedClients by server.connectedClients.collectAsStateWithLifecycle()
     val linked by server.linkedClient.collectAsStateWithLifecycle()
+    val relayState by server.relay.state.collectAsStateWithLifecycle()
+
+    // Mark the live view as stale when frames stop arriving (client paused
+    // sharing, or the client went offline).
+    LaunchedEffect(Unit) {
+        while (true) {
+            screenLive = lastFrameAtMillis > 0 && System.currentTimeMillis() - lastFrameAtMillis < 4_000
+            delay(2_000)
+        }
+    }
 
     LaunchedEffect(Unit) {
         ServerLinkService.start(context)
@@ -114,7 +137,14 @@ fun ServerMainScreen(
                         messages.removeAt(messages.lastIndex)
                     }
                 }
-                is StreamMessage.ScreenFrame -> latestFrame = message
+                is StreamMessage.ScreenFrame -> {
+                    latestFrame = message
+                    lastFrameAtMillis = System.currentTimeMillis()
+                }
+                is StreamMessage.AudioChunk -> if (audioEnabled) {
+                    AudioPlayer.start(message.sampleRate, message.channelMask, message.encoding)
+                    AudioPlayer.write(message.data)
+                }
                 else -> Unit
             }
         }
@@ -195,6 +225,22 @@ fun ServerMainScreen(
                                     style = MaterialTheme.typography.labelMedium,
                                     color = MaterialTheme.colorScheme.secondary
                                 )
+                                relayState.let { state ->
+                                    val label = when (state) {
+                                        is RelayHubTunnel.State.DeviceOnline -> "Relay: device online"
+                                        is RelayHubTunnel.State.WaitingForDevice -> "Relay: waiting for device"
+                                        is RelayHubTunnel.State.Connecting -> "Relay: connecting…"
+                                        is RelayHubTunnel.State.Error -> "Relay error: ${state.message}"
+                                        is RelayHubTunnel.State.Disabled -> null
+                                    }
+                                    label?.let {
+                                        Text(
+                                            text = it,
+                                            style = MaterialTheme.typography.labelMedium,
+                                            color = MaterialTheme.colorScheme.tertiary
+                                        )
+                                    }
+                                }
                                 linked?.let {
                                     Text(
                                         text = it.deviceName,
@@ -231,7 +277,7 @@ fun ServerMainScreen(
                                 Column {
                                     Text("View linked screen", style = MaterialTheme.typography.titleMedium)
                                     Text(
-                                        if (latestFrame != null) "Live — tap to interact" else "Waiting for frames",
+                                        if (screenLive) "Live — tap to interact" else "Start or view sharing",
                                         style = MaterialTheme.typography.bodySmall
                                     )
                                 }
@@ -270,15 +316,81 @@ fun ServerMainScreen(
                 },
                 detailPane = {
                     if (connectedClients > 0) {
-                        MirroredScreen(
-                            frame = latestFrame,
-                            onTap = { x, y ->
-                                server.broadcast(StreamMessage.TapEvent(x, y))
-                            },
-                            onSwipe = { sx, sy, ex, ey ->
-                                server.broadcast(StreamMessage.SwipeEvent(sx, sy, ex, ey))
+                        Box(modifier = Modifier.fillMaxSize()) {
+                            MirroredScreen(
+                                frame = latestFrame,
+                                onTap = { x, y ->
+                                    server.broadcast(StreamMessage.TapEvent(x, y))
+                                },
+                                onSwipe = { sx, sy, ex, ey ->
+                                    server.broadcast(StreamMessage.SwipeEvent(sx, sy, ex, ey))
+                                }
+                            )
+                            // Overlay controls: request/stop sharing and audio.
+                            Surface(
+                                shape = MaterialTheme.shapes.large,
+                                color = Color.Black.copy(alpha = 0.55f),
+                                modifier = Modifier
+                                    .align(Alignment.TopCenter)
+                                    .padding(12.dp)
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    if (screenLive) {
+                                        IconButton(onClick = {
+                                            server.broadcast(StreamMessage.StopScreenCapture)
+                                            AudioPlayer.stop()
+                                        }) {
+                                            Icon(
+                                                Icons.Rounded.Stop,
+                                                contentDescription = "Stop screen sharing",
+                                                tint = Color.White
+                                            )
+                                        }
+                                    } else {
+                                        FilledTonalButton(
+                                            onClick = {
+                                                server.broadcast(StreamMessage.StartScreenCapture)
+                                            }
+                                        ) {
+                                            Icon(Icons.Rounded.PlayCircle, contentDescription = null)
+                                            Spacer(modifier = Modifier.width(6.dp))
+                                            Text("Start screen")
+                                        }
+                                        Spacer(modifier = Modifier.width(4.dp))
+                                    }
+                                    IconButton(onClick = {
+                                        val next = !audioEnabled
+                                        audioEnabled = next
+                                        if (!next) AudioPlayer.stop()
+                                    }) {
+                                        Icon(
+                                            if (audioEnabled) Icons.Rounded.VolumeUp else Icons.Rounded.VolumeOff,
+                                            contentDescription =
+                                                if (audioEnabled) "Mute linked device audio" else "Listen to linked device audio",
+                                            tint = if (audioEnabled) Color.White else Color.Gray
+                                        )
+                                    }
+                                }
                             }
-                        )
+                            if (!screenLive && latestFrame == null) {
+                                Column(
+                                    modifier = Modifier.align(Alignment.Center),
+                                    horizontalAlignment = Alignment.CenterHorizontally
+                                ) {
+                                    CircularProgressIndicator()
+                                    Spacer(modifier = Modifier.height(16.dp))
+                                    Text("Waiting for the linked screen…", color = Color.White)
+                                    Text(
+                                        "Tap “Start screen” — the device only needs to approve once.",
+                                        color = Color.LightGray,
+                                        style = MaterialTheme.typography.bodySmall
+                                    )
+                                }
+                            }
+                        }
                     } else {
                         Box(
                             modifier = Modifier
@@ -300,14 +412,22 @@ fun ServerMainScreen(
 
     if (showInvite) {
         val invite = serverIp?.let { ip ->
-            encodeQrPayload(QrPayload.server(ip, server.port, deviceName.ifBlank { "Family Hub" }))
+            encodeQrPayload(
+                QrPayload.server(
+                    host = ip,
+                    port = server.port,
+                    serverName = deviceName.ifBlank { "Family Hub" },
+                    deviceId = deviceId.orEmpty(),
+                    pairingKey = pairingKeyOf(prefs)
+                )
+            )
         }
         AlertDialog(
             onDismissRequest = { showInvite = false },
             title = { Text("Invite a device") },
             text = {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Text("If discovery fails, scan this from the client.")
+                    Text("Scan this from the client to connect directly, or to confirm a disconnect.")
                     Spacer(modifier = Modifier.height(12.dp))
                     if (invite != null) {
                         QRCodeDisplay(content = invite, modifier = Modifier.fillMaxWidth())
@@ -360,6 +480,17 @@ fun ServerMainScreen(
             }
         )
     }
+}
+
+/** The hub's own pairing key, used as the disconnect PIN by clients. */
+@Composable
+private fun pairingKeyOf(prefs: UserPreferencesRepository): String {
+    var key by remember { mutableStateOf("") }
+    LaunchedEffect(Unit) {
+        prefs.ensureIdentity()
+        prefs.pairingKeyFlow.collect { key = it.orEmpty() }
+    }
+    return key
 }
 
 @Composable
@@ -447,12 +578,6 @@ fun MirroredScreen(
                 )
             } else {
                 Text("Could not decode the latest frame", color = Color.White)
-            }
-        } else {
-            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                CircularProgressIndicator()
-                Spacer(modifier = Modifier.height(16.dp))
-                Text("Waiting for the linked screen…", color = Color.White)
             }
         }
     }
