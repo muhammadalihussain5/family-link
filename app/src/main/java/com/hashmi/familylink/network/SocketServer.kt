@@ -16,6 +16,7 @@ import io.ktor.server.websocket.receiveDeserialized
 import io.ktor.server.websocket.sendSerialized
 import io.ktor.server.websocket.webSocket
 import io.ktor.websocket.CloseReason
+import io.ktor.websocket.close
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asSharedFlow
@@ -106,11 +107,11 @@ class SocketServer(val port: Int = 8080) {
                         }
                         override fun shutdown() {
                             session.launch {
-                                runCatching {
-                                    session.close(
-                                        CloseReason(CloseReason.Codes.GOING_AWAY, "Unpaired")
-                                    )
-                                }
+                                // Extension in io.ktor.websocket; it swallows
+                                // failures itself, no try/catch needed.
+                                session.close(
+                                    CloseReason(CloseReason.Codes.GOING_AWAY, "Unpaired")
+                                )
                             }
                         }
                     }
