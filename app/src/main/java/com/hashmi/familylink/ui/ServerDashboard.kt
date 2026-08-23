@@ -27,6 +27,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ScreenShare
+import androidx.compose.material.icons.rounded.LinkOff
 import androidx.compose.material.icons.rounded.PlayCircle
 import androidx.compose.material.icons.rounded.QrCode2
 import androidx.compose.material.icons.rounded.QrCodeScanner
@@ -44,6 +45,7 @@ import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
@@ -102,14 +104,18 @@ fun ServerMainScreen(
     val messages = remember { mutableStateListOf<StreamMessage.Notification>() }
     var latestFrame by remember { mutableStateOf<StreamMessage.ScreenFrame?>(null) }
     var isScanning by remember { mutableStateOf(false) }
+    var isScanningDisconnect by remember { mutableStateOf(false) }
     var showInvite by remember { mutableStateOf(false) }
     var showManualKey by remember { mutableStateOf(false) }
+    var showDisconnect by remember { mutableStateOf(false) }
     var serverIp by remember { mutableStateOf<String?>(null) }
     var audioEnabled by remember { mutableStateOf(true) }
     var lastFrameAtMillis by remember { mutableStateOf(0L) }
     var screenLive by remember { mutableStateOf(false) }
     val deviceName by prefs.deviceNameFlow.collectAsStateWithLifecycle(initialValue = "")
     val deviceId by prefs.deviceIdFlow.collectAsStateWithLifecycle(initialValue = null)
+    val authorized by prefs.authorizedClientFlow.collectAsStateWithLifecycle(initialValue = null)
+    val relayUrl by prefs.relayUrlFlow.collectAsStateWithLifecycle(initialValue = "")
 
     val navigator = rememberListDetailPaneScaffoldNavigator<Nothing>()
     val connectedClients by server.connectedClients.collectAsStateWithLifecycle()
@@ -152,6 +158,24 @@ fun ServerMainScreen(
 
     BackHandler(enabled = navigator.canNavigateBack()) {
         scope.launch { navigator.navigateBack() }
+    }
+
+    /**
+     * Hub-side disconnect — the ONLY place a pairing can be ended. Confirmed
+     * upstream by the device's pairing key or its QR code; tells the device,
+     * then forgets it.
+     */
+    fun disconnectDevice() {
+        scope.launch {
+            val target = authorized
+            server.broadcast(StreamMessage.StopScreenCapture)
+            server.broadcast(StreamMessage.Unpair(deviceId = target?.deviceId.orEmpty()))
+            AudioPlayer.stop()
+            delay(600) // give the messages a moment to reach the device
+            prefs.clearAuthorizedClient()
+            server.updateAuthorizedKey(null) // closes the device's connection
+            Toast.makeText(context, "Device disconnected", Toast.LENGTH_SHORT).show()
+        }
     }
 
     Scaffold(
@@ -202,6 +226,27 @@ fun ServerMainScreen(
                     }
                 },
                 onCancel = { isScanning = false },
+                modifier = Modifier.padding(innerPadding)
+            )
+        } else if (isScanningDisconnect) {
+            QRScanner(
+                onResult = { raw ->
+                    isScanningDisconnect = false
+                    val payload = decodeQrPayload(raw)
+                    val expected = authorized
+                    if (expected != null && payload?.isClientPairing() == true &&
+                        payload.pairingKey.equals(expected.pairingKey, ignoreCase = true)
+                    ) {
+                        disconnectDevice()
+                    } else {
+                        Toast.makeText(
+                            context,
+                            "Scan the QR code shown on the paired device.",
+                            Toast.LENGTH_SHORT
+                        ).show()
+                    }
+                },
+                onCancel = { isScanningDisconnect = false },
                 modifier = Modifier.padding(innerPadding)
             )
         } else {
@@ -290,6 +335,21 @@ fun ServerMainScreen(
                             modifier = Modifier.fillMaxWidth()
                         ) {
                             Text("Enter pairing key")
+                        }
+
+                        Spacer(modifier = Modifier.height(8.dp))
+                        OutlinedButton(
+                            onClick = { showDisconnect = true },
+                            enabled = authorized != null,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Icon(
+                                Icons.Rounded.LinkOff,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.error
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("Disconnect device")
                         }
 
                         Spacer(modifier = Modifier.height(20.dp))
@@ -418,7 +478,8 @@ fun ServerMainScreen(
                     port = server.port,
                     serverName = deviceName.ifBlank { "Family Hub" },
                     deviceId = deviceId.orEmpty(),
-                    pairingKey = pairingKeyOf(prefs)
+                    pairingKey = pairingKeyOf(prefs),
+                    relayUrl = relayUrl
                 )
             )
         }
@@ -427,7 +488,14 @@ fun ServerMainScreen(
             title = { Text("Invite a device") },
             text = {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Text("Scan this from the client to connect directly, or to confirm a disconnect.")
+                    Text(
+                        if (relayUrl.isNotBlank()) {
+                            "Scan this on the device to pair it. It carries this hub's relay " +
+                                "address, so the very first pairing works over the internet too."
+                        } else {
+                            "Scan this on the device to pair it and connect directly over Wi‑Fi."
+                        }
+                    )
                     Spacer(modifier = Modifier.height(12.dp))
                     if (invite != null) {
                         QRCodeDisplay(content = invite, modifier = Modifier.fillMaxWidth())
@@ -480,9 +548,59 @@ fun ServerMainScreen(
             }
         )
     }
+
+    // Disconnect menu — the only way a pairing ends. Requires the device's
+    // pairing key (shown on the device) or scanning the device's QR code.
+    if (showDisconnect) {
+        var keyDraft by remember { mutableStateOf("") }
+        AlertDialog(
+            onDismissRequest = { showDisconnect = false },
+            title = { Text("Disconnect device?") },
+            text = {
+                Column {
+                    Text(
+                        "Only the hub can disconnect a linked device. Confirm with the device's " +
+                            "pairing key (the XXXX-XXXX code shown on it) or scan the device's QR code."
+                    )
+                    Spacer(modifier = Modifier.height(12.dp))
+                    OutlinedTextField(
+                        value = keyDraft,
+                        onValueChange = { keyDraft = it.uppercase() },
+                        label = { Text("Device pairing key (XXXX-XXXX)") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        val expected = authorized
+                        when {
+                            expected == null -> showDisconnect = false
+                            keyDraft.trim().equals(expected.pairingKey, ignoreCase = true) -> {
+                                showDisconnect = false
+                                disconnectDevice()
+                            }
+                            else -> Toast.makeText(context, "Wrong device key.", Toast.LENGTH_SHORT).show()
+                        }
+                    }
+                ) { Text("Disconnect") }
+            },
+            dismissButton = {
+                Row {
+                    TextButton(onClick = {
+                        showDisconnect = false
+                        isScanningDisconnect = true
+                    }) { Text("Scan device QR") }
+                    TextButton(onClick = { showDisconnect = false }) { Text("Cancel") }
+                }
+            }
+        )
+    }
 }
 
-/** The hub's own pairing key, used as the disconnect PIN by clients. */
+/** The hub's own pairing key, embedded in its invite QR for identity. */
 @Composable
 private fun pairingKeyOf(prefs: UserPreferencesRepository): String {
     var key by remember { mutableStateOf("") }

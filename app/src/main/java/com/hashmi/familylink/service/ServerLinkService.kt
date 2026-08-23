@@ -6,9 +6,7 @@ import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
-import android.util.Log
 import androidx.core.content.ContextCompat
-import com.hashmi.familylink.data.StreamMessage
 import com.hashmi.familylink.data.UserPreferencesRepository
 import com.hashmi.familylink.network.NetworkManager
 import com.hashmi.familylink.network.RelayHubTunnel
@@ -26,6 +24,11 @@ import kotlinx.coroutines.launch
  * Keeps the hub WebSocket server, UDP presence broadcast and (when
  * configured) the internet relay tunnel running independently of the
  * dashboard UI.
+ *
+ * Disconnects originate ONLY here on the hub (the dashboard's
+ * "Disconnect device" menu, which requires the device's pairing key or QR);
+ * unpair requests sent by clients are ignored — a linked device cannot
+ * disconnect itself.
  */
 class ServerLinkService : Service() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -38,7 +41,6 @@ class ServerLinkService : Service() {
         scope.launch { startHub() }
         observeClients()
         observeRelayConfig()
-        listenForUnpair()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -86,21 +88,6 @@ class ServerLinkService : Service() {
                         NetworkManager.server.relay.stop()
                     }
                 }
-        }
-    }
-
-    /** A client that unpairs from its disconnect section is forgotten here too. */
-    private fun listenForUnpair() {
-        scope.launch {
-            NetworkManager.server.messages.collect { message ->
-                if (message is StreamMessage.Unpair) {
-                    val authorized = prefs.authorizedClientFlow.first()
-                    if (authorized != null && message.deviceId == authorized.deviceId) {
-                        Log.w(TAG, "Client ${message.deviceId} requested unpair")
-                        prefs.clearAuthorizedClient()
-                    }
-                }
-            }
         }
     }
 
@@ -160,8 +147,6 @@ class ServerLinkService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     companion object {
-        private const val TAG = "ServerLinkService"
-
         fun start(context: Context) {
             ContextCompat.startForegroundService(
                 context,

@@ -36,11 +36,15 @@ mobile data without you doing anything.
      gets a free Let's Encrypt certificate automatically, or
    - `TLS_CERT`/`TLS_KEY` env vars for direct `wss://`, or
    - Cloudflare/nginx.
-4. On **both phones**: *Family Link → Settings → Internet relay* → enter
+4. On the **hub**: *Family Link → Settings → Internet relay* → enter
    `wss://relay.example.com`.
-5. Pair the devices as usual (hub scans the client QR). The hub joins the
-   relay room as soon as it has a paired device; the client joins once it is
-   paired. From then on they are linked over the internet too — the same
+5. Pair the devices as usual: the hub scans the client QR (or types the key),
+   and the client scans the hub's invite QR. The invite carries the relay
+   address, so the client joins the relay room the moment it scans — the very
+   first pairing works over the internet, no shared Wi‑Fi needed. (Already
+   paired before setting the relay up? Enter the same address on the client in
+   *Settings → Internet relay*; a paired client always uses the relay when one
+   is configured.) From then on they are linked over the internet too — the same
    dashboard, screen share, remote taps, notifications and audio work.
 
 Bandwidth note: mirroring is automatically throttled to a lower frame rate

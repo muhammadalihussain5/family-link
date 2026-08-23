@@ -21,7 +21,6 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ScreenShare
-import androidx.compose.material.icons.rounded.LinkOff
 import androidx.compose.material.icons.rounded.QrCodeScanner
 import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material.icons.rounded.Stop
@@ -87,9 +86,7 @@ fun ClientMainScreen(
 
     var isMirroring by remember { mutableStateOf(false) }
     var isScanning by remember { mutableStateOf(false) }
-    var isScanningDisconnect by remember { mutableStateOf(false) }
     var showAddressDialog by remember { mutableStateOf(false) }
-    var showDisconnectDialog by remember { mutableStateOf(false) }
 
     // Reflect hub-driven capture state (started/stopped from the hub side).
     LaunchedEffect(Unit) {
@@ -128,16 +125,6 @@ fun ClientMainScreen(
         }
     }
 
-    fun performDisconnect() {
-        scope.launch {
-            val identity = prefs.ensureIdentity()
-            NetworkManager.client.sendMessage(StreamMessage.Unpair(deviceId = identity.deviceId))
-            prefs.clearPairedHub()
-            ScreenCaptureService.stopService(context)
-            Toast.makeText(context, "Disconnected from the hub", Toast.LENGTH_SHORT).show()
-        }
-    }
-
     Scaffold(
         topBar = {
             CenterAlignedTopAppBar(
@@ -161,38 +148,33 @@ fun ClientMainScreen(
                     isScanning = false
                     val payload = decodeQrPayload(raw)
                     if (payload?.isServerInvite() == true) {
-                        ClientLinkService.start(context, payload.host, payload.port)
-                        Toast.makeText(
-                            context,
-                            "Connecting to ${payload.deviceName.ifBlank { payload.host }}",
-                            Toast.LENGTH_SHORT
-                        ).show()
+                        if (payload.relayUrl.isNotBlank()) {
+                            // Internet invite: remember the hub's relay and
+                            // dial it — this scan is the explicit action that
+                            // lets the (still unpaired) client connect.
+                            scope.launch {
+                                prefs.updateRelayUrl(payload.relayUrl)
+                                prefs.setRelayInvited(true)
+                                ClientLinkService.start(context)
+                            }
+                            Toast.makeText(
+                                context,
+                                "Connecting to ${payload.deviceName.ifBlank { "the hub" }} via relay",
+                                Toast.LENGTH_SHORT
+                            ).show()
+                        } else {
+                            ClientLinkService.start(context, payload.host, payload.port)
+                            Toast.makeText(
+                                context,
+                                "Connecting to ${payload.deviceName.ifBlank { payload.host }}",
+                                Toast.LENGTH_SHORT
+                            ).show()
+                        }
                     } else {
                         Toast.makeText(context, "That code is not a Family Hub invite.", Toast.LENGTH_SHORT).show()
                     }
                 },
                 onCancel = { isScanning = false },
-                modifier = Modifier.padding(innerPadding)
-            )
-        } else if (isScanningDisconnect) {
-            val hub = pairedHub
-            QRScanner(
-                onResult = { raw ->
-                    isScanningDisconnect = false
-                    val payload = decodeQrPayload(raw)
-                    if (hub != null && payload?.isServerInvite() == true &&
-                        payload.deviceId.isNotBlank() && payload.deviceId == hub.hubDeviceId
-                    ) {
-                        performDisconnect()
-                    } else {
-                        Toast.makeText(
-                            context,
-                            "Scan the QR code shown on your paired hub.",
-                            Toast.LENGTH_SHORT
-                        ).show()
-                    }
-                },
-                onCancel = { isScanningDisconnect = false },
                 modifier = Modifier.padding(innerPadding)
             )
         } else {
@@ -240,8 +222,9 @@ fun ClientMainScreen(
                             if (pairedHub == null) {
                                 "The Family Hub scans this code (or types the key) to authorize this phone."
                             } else {
-                                "The hub can start and stop screen sharing by itself. This pairing stays " +
-                                    "active even after restarts, until you disconnect below."
+                                "The hub controls this link: it can start and stop screen sharing by " +
+                                    "itself, and this pairing stays active across restarts until the hub " +
+                                    "disconnects it. It cannot be disconnected from this phone."
                             },
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -329,48 +312,6 @@ fun ClientMainScreen(
                 }
 
                 Spacer(modifier = Modifier.height(12.dp))
-
-                // Disconnect section: requires the hub's PIN or its QR code,
-                // so the pairing cannot be quietly removed from this phone.
-                if (pairedHub != null) {
-                    Card(
-                        colors = CardDefaults.cardColors(
-                            containerColor = MaterialTheme.colorScheme.surface
-                        ),
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Column(
-                            modifier = Modifier.padding(20.dp),
-                            horizontalAlignment = Alignment.CenterHorizontally
-                        ) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Icon(
-                                    Icons.Rounded.LinkOff,
-                                    contentDescription = null,
-                                    tint = MaterialTheme.colorScheme.error
-                                )
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Text("Disconnect", style = MaterialTheme.typography.titleMedium)
-                            }
-                            Text(
-                                "Unpairs this phone from the hub. You'll need the hub's PIN " +
-                                    "(its pairing key, shown on the hub) or its QR code to confirm.",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                textAlign = TextAlign.Center
-                            )
-                            Spacer(modifier = Modifier.height(12.dp))
-                            OutlinedButton(
-                                onClick = { showDisconnectDialog = true },
-                                modifier = Modifier.fillMaxWidth()
-                            ) {
-                                Text("Disconnect from hub")
-                            }
-                        }
-                    }
-                }
-
-                Spacer(modifier = Modifier.height(12.dp))
                 OutlinedButton(
                     onClick = onNavigateToPermissions,
                     modifier = Modifier.fillMaxWidth()
@@ -392,7 +333,8 @@ fun ClientMainScreen(
                     Text(
                         "First time: pair on the hub first (it scans your QR or types your key), " +
                             "then enter the hub's address. On the same Wi-Fi use its local IP; " +
-                            "over the internet use its public address or set up a relay in Settings."
+                            "over the internet scan the hub's invite QR instead — it carries the " +
+                            "relay address automatically."
                     )
                     Spacer(modifier = Modifier.height(12.dp))
                     OutlinedTextField(
@@ -426,59 +368,6 @@ fun ClientMainScreen(
             },
             dismissButton = {
                 TextButton(onClick = { showAddressDialog = false }) { Text("Cancel") }
-            }
-        )
-    }
-
-    if (showDisconnectDialog) {
-        var pinDraft by remember { mutableStateOf("") }
-        val hub = pairedHub
-        AlertDialog(
-            onDismissRequest = { showDisconnectDialog = false },
-            title = { Text("Disconnect from hub?") },
-            text = {
-                Column {
-                    Text(
-                        "Enter the hub's PIN — its pairing key, shown in Family Link on the hub " +
-                            "device — or scan the hub's QR code to confirm."
-                    )
-                    Spacer(modifier = Modifier.height(12.dp))
-                    OutlinedTextField(
-                        value = pinDraft,
-                        onValueChange = { pinDraft = it.uppercase() },
-                        label = { Text("Hub PIN (XXXX-XXXX)") },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                }
-            },
-            confirmButton = {
-                TextButton(
-                    onClick = {
-                        val serverKey = hub?.serverKey.orEmpty()
-                        if (serverKey.isBlank()) {
-                            Toast.makeText(
-                                context,
-                                "Use the hub's QR code to disconnect.",
-                                Toast.LENGTH_SHORT
-                            ).show()
-                        } else if (pinDraft.trim().equals(serverKey, ignoreCase = true)) {
-                            showDisconnectDialog = false
-                            performDisconnect()
-                        } else {
-                            Toast.makeText(context, "Wrong hub PIN.", Toast.LENGTH_SHORT).show()
-                        }
-                    }
-                ) { Text("Disconnect") }
-            },
-            dismissButton = {
-                Row {
-                    TextButton(onClick = {
-                        showDisconnectDialog = false
-                        isScanningDisconnect = true
-                    }) { Text("Scan hub QR") }
-                    TextButton(onClick = { showDisconnectDialog = false }) { Text("Cancel") }
-                }
             }
         )
     }

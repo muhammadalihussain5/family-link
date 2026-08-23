@@ -4,6 +4,7 @@ import android.content.Context
 import android.os.Build
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
+import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
@@ -34,6 +35,7 @@ class UserPreferencesRepository(private val context: Context) {
         val PAIRED_HUB_NAME = stringPreferencesKey("paired_hub_name")
         val PAIRED_HUB_KEY = stringPreferencesKey("paired_hub_key")
         val RELAY_URL = stringPreferencesKey("relay_url")
+        val RELAY_INVITED = booleanPreferencesKey("relay_invited")
         val PROJECTION_GRANT_CODE = intPreferencesKey("projection_grant_code")
         val PROJECTION_GRANT_DATA = stringPreferencesKey("projection_grant_data")
     }
@@ -79,6 +81,16 @@ class UserPreferencesRepository(private val context: Context) {
     /** URL (ws:// or wss://) of the internet relay server, blank when unused. */
     val relayUrlFlow: Flow<String> = context.dataStore.data.map { preferences ->
         preferences[Keys.RELAY_URL].orEmpty().trim()
+    }
+
+    /**
+     * True once this client scanned a hub invite QR that carried a relay
+     * address — the explicit user action that allows the (still unpaired)
+     * client to dial the relay and wait for the hub to complete the pairing.
+     * Without it an unpaired client never connects anywhere by itself.
+     */
+    val relayInvitedFlow: Flow<Boolean> = context.dataStore.data.map { preferences ->
+        preferences[Keys.RELAY_INVITED] ?: false
     }
 
     val lastServerHostFlow: Flow<String?> = context.dataStore.data.map { it[Keys.LAST_SERVER_HOST] }
@@ -158,8 +170,20 @@ class UserPreferencesRepository(private val context: Context) {
         context.dataStore.edit { preferences ->
             if (cleaned.isBlank()) {
                 preferences.remove(Keys.RELAY_URL)
+                preferences.remove(Keys.RELAY_INVITED)
             } else {
                 preferences[Keys.RELAY_URL] = cleaned
+            }
+        }
+    }
+
+    /** Records/clears that this client accepted a hub's relay invite. */
+    suspend fun setRelayInvited(value: Boolean) {
+        context.dataStore.edit { preferences ->
+            if (value) {
+                preferences[Keys.RELAY_INVITED] = true
+            } else {
+                preferences.remove(Keys.RELAY_INVITED)
             }
         }
     }
@@ -216,6 +240,7 @@ class UserPreferencesRepository(private val context: Context) {
             preferences.remove(Keys.PAIRED_HUB_NAME)
             preferences.remove(Keys.PAIRED_HUB_KEY)
             preferences.remove(Keys.RELAY_URL)
+            preferences.remove(Keys.RELAY_INVITED)
         }
     }
 

@@ -71,7 +71,6 @@ fun SettingsScreen(
     var nameDraft by remember(deviceName) { mutableStateOf(deviceName) }
     var relayDraft by remember(relayUrl) { mutableStateOf(relayUrl) }
     var confirmReset by remember { mutableStateOf(false) }
-    var showClearPairing by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) { prefs.ensureIdentity() }
 
@@ -120,9 +119,9 @@ fun SettingsScreen(
             pairingKey?.let { key ->
                 Text("Your pairing key", style = MaterialTheme.typography.labelLarge)
                 PairingKeyBadge(pairingKey = key)
-                if (mode == AppMode.SERVER) {
+                if (mode == AppMode.CLIENT) {
                     Text(
-                        "Clients must re-enter this key (or scan this hub's QR) to disconnect from the hub.",
+                        "The hub scans this key (or your QR) to authorize this phone.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -143,10 +142,13 @@ fun SettingsScreen(
                                 client.deviceName.ifBlank { client.deviceId },
                                 style = MaterialTheme.typography.bodyMedium
                             )
-                            Spacer(modifier = Modifier.height(8.dp))
-                            OutlinedButton(onClick = { showClearPairing = true }) {
-                                Text("Unpair device")
-                            }
+                            Text(
+                                "To disconnect it, use “Disconnect device” on the hub dashboard " +
+                                    "(the device's key or its QR is required). The device " +
+                                    "cannot disconnect itself.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
                         }
                     }
                 }
@@ -165,8 +167,8 @@ fun SettingsScreen(
                                 style = MaterialTheme.typography.bodyMedium
                             )
                             Text(
-                                "To disconnect, use the Disconnect section on the dashboard " +
-                                    "(hub PIN or hub QR required).",
+                                "Only the hub can disconnect this pairing — ask the hub device " +
+                                    "to use its “Disconnect device” menu.",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -254,48 +256,6 @@ fun SettingsScreen(
                 Text("Switch mode…")
             }
         }
-    }
-
-    // Hub-side unpair: requires the client's pairing key so it can't be
-    // triggered by accident (or by someone holding the hub unlocked).
-    if (showClearPairing) {
-        var draft by remember { mutableStateOf("") }
-        AlertDialog(
-            onDismissRequest = { showClearPairing = false },
-            title = { Text("Unpair device?") },
-            text = {
-                Column {
-                    Text("Enter the paired device's pairing key to confirm. It will have to pair again from scratch.")
-                    Spacer(modifier = Modifier.height(12.dp))
-                    OutlinedTextField(
-                        value = draft,
-                        onValueChange = { draft = it.uppercase() },
-                        label = { Text("XXXX-XXXX") },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                }
-            },
-            confirmButton = {
-                TextButton(
-                    onClick = {
-                        val expected = authorized?.pairingKey
-                        if (expected != null && draft.trim().equals(expected, ignoreCase = true)) {
-                            scope.launch {
-                                prefs.clearAuthorizedClient()
-                                NetworkManager.server.updateAuthorizedKey(null)
-                            }
-                            showClearPairing = false
-                        } else {
-                            Toast.makeText(context, "Wrong pairing key.", Toast.LENGTH_SHORT).show()
-                        }
-                    }
-                ) { Text("Unpair") }
-            },
-            dismissButton = {
-                TextButton(onClick = { showClearPairing = false }) { Text("Cancel") }
-            }
-        )
     }
 
     if (confirmReset) {

@@ -19,6 +19,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlin.coroutines.coroutineContext
 
 /**
  * Hub side of the internet relay. Dials out to the relay server, registers
@@ -81,7 +82,7 @@ class RelayHubTunnel(private val server: SocketServer) {
     }
 
     private suspend fun tunnelLoop(url: String, room: String, token: String, deviceName: String) {
-        val myJob = kotlinx.coroutines.coroutineContext[Job]
+        val myJob = coroutineContext[Job]
         while (scope.isActive) {
             if (badConfig) break
             var handle: RelayHandle? = null

@@ -16,6 +16,7 @@ import io.ktor.server.websocket.receiveDeserialized
 import io.ktor.server.websocket.sendSerialized
 import io.ktor.server.websocket.webSocket
 import io.ktor.websocket.CloseReason
+import io.ktor.websocket.close
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asSharedFlow
@@ -56,16 +57,28 @@ class SocketServer(val port: Int = 8080) {
         abstract val id: String
         abstract fun post(message: StreamMessage)
         open fun shutdown() {}
+
+        /**
+         * True only after a handshake carrying the authorized pairing key was
+         * accepted. Until then the handle may not feed anything into the hub.
+         */
+        @Volatile
+        var authorized = false
     }
 
     fun updateAuthorizedKey(pairingKey: String?) {
         val key = pairingKey?.takeIf { it.isNotBlank() }
+        val changed = authorizedKey.get() != key
         authorizedKey.set(key)
         if (key == null) {
             _linkedClient.value = null
             handles.values.forEach { it.shutdown() }
             handles.clear()
             _connectedClients.value = 0
+        } else if (changed) {
+            // A new device was paired: everybody currently connected has to
+            // re-authenticate with the new key.
+            handles.values.forEach { it.authorized = false }
         }
     }
 
@@ -92,26 +105,30 @@ class SocketServer(val port: Int = 8080) {
             routing {
                 webSocket("/link") {
                     Log.d(TAG, "Client socket opened")
+                    val session = this
                     val handle = object : HubHandle() {
-                        override val id = "lan-${hashCode()}"
+                        override val id = "lan-${session.hashCode()}"
                         override fun post(message: StreamMessage) {
-                            launch {
+                            session.launch {
                                 try {
-                                    sendSerialized<StreamMessage>(message)
+                                    session.sendSerialized<StreamMessage>(message)
                                 } catch (e: Exception) {
                                     Log.e(TAG, "Failed to send ${message::class.simpleName}", e)
                                 }
                             }
                         }
                         override fun shutdown() {
-                            launch {
-                                runCatching {
-                                    close(CloseReason(CloseReason.Codes.GOING_AWAY, "Unpaired"))
-                                }
+                            session.launch {
+                                // Extension in io.ktor.websocket; it swallows
+                                // failures itself, no try/catch needed.
+                                session.close(
+                                    CloseReason(CloseReason.Codes.GOING_AWAY, "Unpaired")
+                                )
                             }
                         }
                     }
                     registerHandle(handle)
+
                     try {
                         while (true) {
                             val message = receiveDeserialized<StreamMessage>()
@@ -146,13 +163,15 @@ class SocketServer(val port: Int = 8080) {
     /**
      * Handles a message from any transport (LAN socket or relay tunnel).
      * A handshake is only accepted when the hub has explicitly paired the
-     * device — the first arriving device is never adopted automatically.
+     * device — the first arriving device is never adopted automatically —
+     * and every other message is dropped unless that handshake succeeded,
+     * so an unpaired device can never feed data into the hub.
      */
     internal suspend fun dispatch(handle: HubHandle, message: StreamMessage) {
         when (message) {
             is StreamMessage.Heartbeat -> Unit
             is StreamMessage.Handshake -> handleHandshake(handle, message)
-            else -> _messages.emit(message)
+            else -> if (handle.authorized) _messages.emit(message)
         }
     }
 
@@ -162,6 +181,7 @@ class SocketServer(val port: Int = 8080) {
     ) {
         val expected = authorizedKey.get()
         if (expected.isNullOrBlank() || !expected.equals(handshake.pairingKey, ignoreCase = true)) {
+            handle.authorized = false
             handle.post(
                 StreamMessage.HandshakeAck(
                     accepted = false,
@@ -173,6 +193,7 @@ class SocketServer(val port: Int = 8080) {
             return
         }
 
+        handle.authorized = true
         _linkedClient.value = LinkedSession(
             deviceId = handshake.deviceId,
             deviceName = handshake.deviceName.ifBlank { "Family Device" }

@@ -58,6 +58,32 @@ class PairingTest {
     }
 
     @Test
+    fun serverInviteCarriesRelayAddress() {
+        val payload = QrPayload.server(
+            host = "192.168.0.12",
+            port = 8080,
+            serverName = "Family Hub",
+            deviceId = "hub-id-1",
+            pairingKey = "ZZ11-ZZ22",
+            relayUrl = "wss://relay.example.com"
+        )
+        val decoded = decodeQrPayload(encodeQrPayload(payload))
+        assertNotNull(decoded)
+        assertTrue(decoded!!.isServerInvite())
+        assertEquals("wss://relay.example.com", decoded.relayUrl)
+    }
+
+    @Test
+    fun legacyInviteWithoutRelayStillDecodesWithBlankRelay() {
+        val legacy = """{"kind":"server","host":"10.0.0.4","port":8080,""" +
+            """"deviceName":"Kitchen Hub","deviceId":"hub-9","pairingKey":"AB12-CD34"}"""
+        val decoded = decodeQrPayload(legacy)
+        assertNotNull(decoded)
+        assertTrue(decoded!!.isServerInvite())
+        assertEquals("", decoded.relayUrl)
+    }
+
+    @Test
     fun barePairingKeyIsAccepted() {
         val decoded = decodeQrPayload("ab12-cd34")
         assertNotNull(decoded)

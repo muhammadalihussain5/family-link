@@ -24,14 +24,19 @@ relay.
 3. On the hub, tap the scan icon and read the client QR (or enter the printed key). The hub now *expects* this device — until then it rejects every connection.
 4. On the client, connect to the hub once: scan the hub's invite QR (top bar) or use **Connect to a hub** and type the hub's address.
 
+The order doesn't matter: if the client connects before the hub has scanned
+its QR, the hub rejects it and the client calmly retries (slower, so it never
+hammers the hub) until the pairing is completed on the hub — then the link
+forms on its own.
+
 Both phones now remember the pairing (DataStore). They reconnect automatically
 on boot, after crashes, and across network changes — the client ignores hubs
 it is not paired with.
 
-**Disconnecting (deliberate, protected)**
+**Disconnecting (hub authority only)**
 
-- On the **client**, the *Disconnect* section on the dashboard unpairs the phone. Confirming requires the **hub's PIN** (the pairing key shown on the hub) or **scanning the hub's QR code** — so the link can't be quietly removed from the child device.
-- On the **hub**, Settings → *Unpair device* requires the **client's** pairing key. The client can also send an unpair request itself (its Disconnect section tells the hub to forget it).
+- A pairing can **only** be ended from the **hub**: dashboard → **Disconnect device**. Confirming requires the **client's** pairing key (the `XXXX-XXXX` code shown on the client) or **scanning the client's QR code**. The device is told, forgets the hub, and returns to the waiting-to-be-paired state.
+- The **client has no disconnect control at all** — a linked phone cannot unpair itself, and unpair requests sent from the client are ignored by the hub. Only the hub decides when the link ends.
 
 ## Working across the internet
 
@@ -40,8 +45,9 @@ devices can stay linked from anywhere — both phones dial out, so no port
 forwarding is needed and NAT/CGNAT is irrelevant.
 
 1. Deploy the ready-made relay from **[`relay-server/`](relay-server/README.md)** on any small VPS (Node.js, one file; Docker and systemd recipes included) with TLS in front (Caddy makes it automatic).
-2. On both phones: **Settings → Internet relay** → enter `wss://relay.example.com`.
-3. That's it. Pairing, presence, screen sharing, audio, remote taps and notifications all work through the relay; the client automatically throttles the mirror frame rate for the slower link.
+2. On the **hub**: **Settings → Internet relay** → enter `wss://relay.example.com`. The hub's invite QR now carries the relay address.
+3. On the **client**: scan the hub's invite QR (top bar scan icon). That one scan is the explicit action that lets the client dial the relay — the very first pairing then works over the internet, no shared Wi‑Fi needed.
+4. That's it. Pairing, presence, screen sharing, audio, remote taps and notifications all work through the relay; the client automatically throttles the mirror frame rate for the slower link.
 
 Alternatives (VPN overlay like Tailscale, or manual port forwarding) and
 security notes are described in **[`docs/INTERNET.md`](docs/INTERNET.md)**.
